@@ -1,0 +1,291 @@
+The Kalman Filter
+
+This document derives the Kalman filter and documents the supporting software. 
+
+====================
+=== Introduction ===
+====================
+
+The Kalman filter is a minimum mean square estimator of a linear Gauss-Markov model
+of the form:
+
+x(t+1) = A*x(t) + w(t)
+y(t) = C*x(t) + v(t)
+
+We seek to make optimal estimates of the next state, given the system dynamics, noise model,
+and prior measurements. We have both "process noise" w(t) as well as "measurement noise" v(t).
+
+The following statistical assumptions apply: the model is a "Gaussian Process", meaning
+that every quantity is a random variable with a Gaussian distribution, and together they
+have a joint distribution. As well, we have: 
+
+w(t) - IID with E(w(t)) = 0, Var(w(t)) = W
+v(t) - IID with E(v(t)) = 0, Var(v(t)) = V
+x(0) - E(x(0)) = mean(x(0)), Var(x(0)) = S(0) //where Var(x)==E((x-mean(x))*(x-mean(x))')
+
+And the Markov property:
+
+x(t)|(x(0),x(1),...,x(t-1)) = x(t)|x(t-1), i.e. only last state info is relevant
+
+======================================
+=== Minimum Mean Square Estimation ===
+======================================
+
+Given a random variables x and y (random vectors of length n and m respectively), we want to 
+estimate x given y. In the Kalman filter, this will relate to estimating our next state
+given all of our previous measurements Y(t) = (y(1), y(2), ..., y(t)). 
+
+But first the general case of x and y; we seek a function x_est(y) such that we minimized
+an error metric; a common metric is the mean-square error:
+
+minimize E(norm(x_est(y) - x)^2),
+ 
+i.e. minimize the expectation of the norm squared of the difference between the estimate and 
+the actual. The general solution to this is:
+
+x_est(y) = E(x|y)
+
+I.e. the mean value of the conditional probability x given y. This quantity
+is called the "minimum mean square estimator". 
+
+Now we seek to find an expression for this quantity when x and y are jointly Gaussian, as is the
+case for our "Gaussian Process" to which we wish to apply the "Kalman filter" to get an optimal
+state estimate. 
+
+If x and y, as above, are jointly Gaussian, then they have a normal distribution (vector definition
+available at http://en.wikipedia.org/wiki/Multivariate_normal_distribution#Density_function) with
+mean and variance given by:
+
+(x, y)' ~ N( (mean(x), mean(y))', [Sx, Sxy; Sxy', Sy] ) //p(x,y), the joint
+
+Where the variance is a 2x2 block matrix which is symmetric positive definite (as with all  
+nondegenerate variance/covariance matrices). 
+
+Now we must find the distribution p(x|y), the conditional. Using the joint probability above,
+we write:
+
+p(x|y) = p(x,y)/p(y) --> p(v|y) ~ exp(-1/2*(v - w)'*D.inv*(v - w)) //dummy variable v for notation
+
+From this, we see that the distribution p(x|y) has a mean and variance:
+
+w = mean(x) + Sxy*Sy.inv*(y - mean(y))
+
+D = Sx - Sxy*Sy.inv*Sxy' //this is the Schur complement of Sy for the joint 2x2 block
+
+And since x_est(y) = E(x|y), x_est(y) = w. We call this definition the "standard formula".
+
+Some more algebra yields that the MMSE estimation error covariance is:
+
+E((x_est(y) - x)*(x_est(y) - x)') = D
+
+Which is the same as the covariance of the conditional distribution. Thus the MMSE estimation error
+covariance is the same as the conditional distribution covariance.
+
+================================
+=== Linear Measurement Model ===
+================================
+
+A quick derivation of the joint probability of a linear measurement model will help in deriving
+the Kalman Filter. Given a linear model with random vectors x in R(n), y in R(m), linear
+transformation A in R(m x n), and sensor noise vector v in R(m), the linear measurement
+model is:
+
+y = A*x + v
+
+y represents the actual measurements, x is the true quantity we want to estimate, and transform
+A characterizes the sensors (perhaps doing things like converting units and/or forming a dynamics
+model). We assume both x and v are normally distributed, with x ~ N(mean(x), Sx), v ~ N(mean(v), Sv).
+They are almost independent.
+
+We seek the joint distribution of [x, y]'. The expected values are simple; mean(x) is just the mean of x.
+Since expectation is a linear operator, mean(y) = A*mean(x) + mean(v).
+
+Now for covariance, we note that [x,y]' = [I, 0; A, I]*[x, v]', i.e. [x, y]' = M*[x, v]'. We know what the
+distribution of [x, v]' looks like: just like the general experssion for joint Gaussians, except we have
+Sxv = Svx' = 0, because x and v are independent. I.e.,
+
+(x, v)' ~ N( (mean(x), mean(v))', [Sx, 0; 0, Sv] ) //the joint of p(x,y)
+
+For a Gaussian distrbution w ~ N(mean(w), Sw), an affine transformation z = A*w + b is also Gaussian
+with covariance Sz = A*Sz*A' (which is fairly easy to prove from the definition). 
+
+Letting z = [x, y]', w = [x, v]', and noting that z = M*w as defined above, the covariance of [x,y]' is:
+
+M*Sw*M' = [I, 0; A, I]*[Sx, 0; 0, Sv]*[I, 0; A, I]'
+
+thus z = [x, y]' has distribution ~ N( (mean(x),A*mean(x)+mean(v))', [Sx, Sx*A'; A*Sx, A*Sx*A'+Sv] )
+
+==================================
+=== Deriving the Kalman Filter ===
+==================================
+
+To quickly recap our model, we have:
+
+x(t+1) = A*x(t) + w(t)
+y(t) = C*x(t) + v(t)
+
+Where x(t) is a vector in R(n), y(t) is in R(p). Some additional notation, which we'll 
+use both in the explanation and the software is required. Let:
+
+var(t|s) == var(t)|Y(t-1) == var(t)|(y(1), y(2), ..., y(s)), where big Y is stacked column vectors, size s*p
+//where 'var' can be our state vector estimate x_hat, or our covariance error matrix S
+
+x_hat_previous <==> x_hat(t|t-1) (e.g. == E(x(t)|Y(t-1)), the expectation of the conditional)
+x_hat_measured <==> x_hat(t|t)
+x_hat_updated <==> x_hat(t+1|t)
+
+And similar for the estimation error covariance matrices, i.e.
+
+S_previous <==> S(t|t-1) == E((x(t) - x_hat(t|t-1))*(x(t) - x_hat(t|t-1))')
+S_measured <==> S(t|t)
+S_updated <==> S(t+1|t)
+
+Theory: our process is Gaussian, so the current state x(t) and the sequence of measurements Y(t) are
+jointly Gaussian. Thus as in the above section, the estimate based on these measurements is:
+
+x_hat(t|t) = E(x(t)|Y(t)) = mean(x(t)) + S_xtYt*S_Yt.inv*(Yt - mean(Yt))
+
+Where the above covariance matrices are significantly larger because they relate x(t) to Y(t), i.e. the
+entire sequence of measurements. In fact, S_Yt is of size p*t x p*t, i.e. it grows in time t! Few 
+algorithms can claim to quadratically in "space-time" (more so when you figure in the inverse).
+
+One might now recall that our system's Markov property should come to the rescue: we don't need to full
+measurement history, only the last one. This is what the Kalman filter does:
+
+==> The Kalman filter is a clever way of computing our measured state and updated prediction recursively. 
+I.e. we will not have to deal with the ever-expanding covariance matrices above. 
+
+Part 1 - Measurement Update
+---------------------------
+
+We first seek to find x_hat(t|t) and S(t|t) in terms of x_hat(t|t-1) and S(t|t-1). 
+I.e. measured predictions in terms of previous predictions. As a side note, in case it is not yet
+obvious, every output quantity is a "prediction" because we have noise in our model. We never know
+exactly what "x" is, hence we predict/estimate using the Kalman filter framework. 
+
+Take the measurement equation of the model:
+
+y(t) = C*x(t) + v(t)
+
+Now condition on the measurements Y(t-1):
+
+y(t)|Y(t-1) = C*x(t)|Y(t-1) + v(t) //recall that sensor noise v(t) is independent of x,y
+
+This is simply a linear measurement model, albeit with more complicated looking expressions. No
+matter, we know from the previous section that our variables have a normal distribution:
+
+[x(t)|Y(t-1), y(t)|Y(t-1)]' ~ 
+
+N( [x_hat(t|t-1), C*x_hat(t|t-1)]', [S(t|t-1), S(t|t-1)*C'; C*S(t|t-1), C*S(t|t-1)*C'+V] )
+
+Where we recall the definition x_hat(t|t-1) == E(x(t)|Y(t-1)), and that mean(v) = 0. Of course
+it's now simple to see how we change things if mean(v) != 0 (the above mean expression for y changes).
+And for clarity we recall that the variable x(t)|Y(t-1) is normally distributed:
+
+x(t)|Y(t-1) ~ N( mean(x(t)|Y(t-1)), S(t|t-1)) = N( x_hat(t|t-1), S(t|t-1)), 
+
+with S(t|t-1) = E((x(t) - x_hat(t|t-1))*(x(t) - x_hat(t|t-1))').
+
+Now to get at expressions for x_hat(t|t) and S(t|t) in terms of the above. Here we make note of the
+following:
+
+x(t)|Y(t) = ((x(t)|Y(t-1))|(y(t)|Y(t-1)))
+
+Which makes sense, because being given y(t) in additional to Y(t-1) is equivalent to being given Y(t).
+
+So using the normal distribution of (x(t)|Y(t-1), y(t)|Y(t-1)) above, we get the mean and variance of 
+x(t)|Y(t) using the standard formula, i.e. we know E(x|y) from p(x|y) which is proportional to p(x,y) 
+(i.e. p(x(t)|Y(t-1), y(t)|Y(t-1)) as above) and also 1/p(y). 
+
+For clarity, the standard formula is repeated below:
+
+w = mean(x) + Sxy*Sy.inv*(y - mean(y)) == E(x|y) == x_hat(t|t) for (x,y) = (x(t)|Y(t-1), y(t)|Y(t-1))
+D = Sx - Sxy*Sy.inv*Sxy' == S(x|y) == S(t|t) 
+
+Substituting in the expressions from the joint of (x(t)|Y(t-1), y(t)|Y(t-1)) with respect to the
+standard formula, we get the "measurement update":
+
+--------------------------------------------------------------------------------------
+x_hat(t|t) = x_hat(t|t-1) + S(t|t-1)*C'*(C*S(t|t-1)*C'+V).inv*(y(t) - C*x_hat(t|t-1))
+
+S(t|t) = S(t|t-1) - S(t|t-1)*C'*(C*S(t|t-1)*C'+V).inv*C*S(t|t-1)
+--------------------------------------------------------------------------------------
+
+We note that measured values are a function of previously predicted values. 
+
+Part 2 - Time Update
+--------------------
+
+We now turn our attention to the next state equation, x(t+1) = A*x(t) + w(t), and apply a similar
+methodology: our objective is to find expressions for x_hat(t+1|t) and S(t+1|t), so we will condition
+this equation on Y(t):
+
+x(t+1)|Y(t) = A*x(t)|Y(t) + w(t) //process noise is independent of measurements
+
+Taking the expected value of both sides, we see that:
+
+x_hat(t+1|t) = A*x_hat(t|t)
+
+For S(t+1|t), we can go back to the definition and work some algebra with relative ease:
+
+S(t+1|t) = E((x(t+1) - x_hat(t+1|t))*(x(t+1) - x_hat(t+1|t))')
+...
+//sub in x(t+1) = A*x(t)+w(t), above expression for x_hat(t+1|t)
+
+S(t+1|t) = A*S(t|t)*A' + W
+
+Thus the prediction for the next/updated state is the following "time update":
+
+----------------------------
+x_hat(t+1|t) = A*x_hat(t|t)
+
+S(t+1|t) = A*S(t|t)*A' + W
+----------------------------
+
+===============================
+=== Putting it all together ===
+===============================
+
+The Kalman filter gives us a forward recursion in time where we successively repeat the
+"measurement update" and the "time update" to get an optimal estimation of our state. 
+
+To start, we need initial conditions: 
+
+x_hat(0|-1) = mean(x(0)), S(0|-1) = E((x(0) - mean(x(0)))*(x(0) - mean(x(0)))') == S(0)
+
+And the measurement and time updates are repeated below for convenience: 
+
+--------------------------
+--- Measurement Update ---
+--------------------------------------------------------------------------------------
+x_hat(t|t) = x_hat(t|t-1) + S(t|t-1)*C'*(C*S(t|t-1)*C'+V).inv*(y(t) - C*x_hat(t|t-1))
+
+S(t|t) = S(t|t-1) - S(t|t-1)*C'*(C*S(t|t-1)*C'+V).inv*C*S(t|t-1)
+--------------------------------------------------------------------------------------
+
+-------------------
+--- Time Update ---
+----------------------------
+x_hat(t+1|t) = A*x_hat(t|t)
+
+S(t+1|t) = A*S(t|t)*A' + W
+----------------------------
+
+==============================
+=== Software Documentation ===
+==============================
+
+=========================
+=== Application Notes ===
+=========================
+
+This section contains notes pertaining to the effective use of the Kalman filter and will be
+updated as more insights are gained from use of the software/algorithm. 
+
+The first note is a heuristic regarding how to set up the process and measurement noise initial
+covariances, i.e. W and V respectively. 
+
+% IMPORTANT: relative magnitude of V vs. magnitude of W
+% As W goes up, roughly it means we trust the measurements more; 
+% while V going up means we trust the state propagation of our last
+% estimate more (i.e. the model)
