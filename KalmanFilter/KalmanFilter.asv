@@ -509,9 +509,4 @@ More concretely, one can add in control with Kalman Filtering by modifying the t
 x_hat(t+1|t) = A*x_hat(t|t) + B*u(t) 
 
 For more info, the following reference derives how to combine Kalman Filtering with a common control scheme, the 
-Linear Quadratic Regulator (i.e. state feedback): 
-
-http://stanford.edu/class/ee363/lectures/lqg.pdf
-http://en.wikipedia.org/wiki/Linear-quadratic-Gaussian_control 
-
-Incidentally, this combination of KF and LQR is called a "Linear Quadratic Gaussian" control problem. 
+Linear Quadratic Regulator (i.e. state feedback):
